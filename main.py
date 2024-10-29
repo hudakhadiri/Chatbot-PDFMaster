@@ -11,7 +11,20 @@ def extract_text_from_pdf(uploaded_file):
     return text
 
 # Load pre-trained model and tokenizer from Hugging Face
-qa_pipeline = pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
+qa_pipeline = pipeline("question-answering", model="bert-large-uncased-whole-word-masking-finetuned-squad")
+
+def get_most_relevant_chunk(question, context, max_length=512):
+    # Split context into chunks
+    chunks = [context[i:i + max_length] for i in range(0, len(context), max_length)]
+    best_chunk = None
+    best_score = -1
+    # Find the best chunk based on the model's score
+    for chunk in chunks:
+        result = qa_pipeline(question=question, context=chunk)
+        if result['score'] > best_score:
+            best_score = result['score']
+            best_chunk = chunk
+    return best_chunk
 
 # Streamlit app
 st.title("Simple Chatbot :wolf:")
@@ -32,7 +45,8 @@ user_input = st.chat_input("Type your message here...")
 if user_input is not None and user_input != "":
     if "pdf_text" in st.session_state:
         context = st.session_state.pdf_text
-        result = qa_pipeline(question=user_input, context=context)
+        relevant_chunk = get_most_relevant_chunk(user_input, context)
+        result = qa_pipeline(question=user_input, context=relevant_chunk)
         response = result['answer']
         st.session_state.chat_history.append(HumanMessage(content=user_input))
         st.session_state.chat_history.append(AIMessage(content=response))
