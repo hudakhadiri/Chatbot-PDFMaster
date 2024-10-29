@@ -1,56 +1,93 @@
 import streamlit as st
-from langchain_core.messages import AIMessage, HumanMessage
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
+from dotenv import load_dotenv
+from PyPDF2 import PdfReader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import HuggingFaceInstructEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.llms import HuggingFaceHub
+from langchain.chains import ConversationalRetrievalChain
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from htmlTemplates import css, bot_template, user_template
 
-# Load Hugging Face model and tokenizer
-model_name = "gpt2"  # You can replace this with any conversational model from Hugging Face
+# Load environment variables
+load_dotenv()
+
+# Initialize Hugging Face model for conversation
+model_name = "facebook/blenderbot-400M-distill"  # Lightweight conversational model
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
-# App configuration
-st.set_page_config(page_title="Streaming bot", page_icon="🤖")
-st.title("Streaming bot")
+# Function to get text from PDF
+def get_pdf_text(pdf_docs):
+    text = ""
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+    return text
 
-def get_response(user_query, chat_history):
-    # Prepare the chat history
-    chat_input = " ".join([msg.content for msg in chat_history])
-    input_text = f"{chat_input} User question: {user_query}"
+# Split text into manageable chunks
+def get_text_chunks(text):
+    text_splitter = CharacterTextSplitter(
+        separator="\\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = text_splitter.split_text(text)
+    return chunks
 
-    # Tokenize and generate a response
-    inputs = tokenizer.encode(input_text, return_tensors='pt')
-    outputs = model.generate(inputs, max_length=100, num_return_sequences=1, pad_token_id=tokenizer.eos_token_id)
-    
-    # Decode the response
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    return response
+# Function to create vector store
+def get_vectorstore(text_chunks):
+    embeddings = HuggingFaceInstructEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    return vectorstore
 
-# Session state for conversation history
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        AIMessage(content="Hello, I am a bot. How can I help you?"),
-    ]
+# Set up conversation chain with Hugging Face
+def get_conversation_chain(vectorstore):
+    # Use Hugging Face model in place of OpenAI
+    llm = HuggingFaceHub(repo_id="facebook/blenderbot-400M-distill")
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),
+        memory=memory
+    )
+    return conversation_chain
 
-# Display conversation history
-for message in st.session_state.chat_history:
-    if isinstance(message, AIMessage):
-        with st.chat_message("AI"):
-            st.write(message.content)
-    elif isinstance(message, HumanMessage):
-        with st.chat_message("Human"):
-            st.write(message.content)
+# Generate bot response using Hugging Face model
+def generate_response(user_input):
+    inputs = tokenizer(user_input, return_tensors="pt")
+    reply_ids = model.generate(**inputs)
+    bot_response = tokenizer.decode(reply_ids[0], skip_special_tokens=True)
+    return bot_response
 
-# User input handling
-user_query = st.chat_input("Type your message here...")
-if user_query:
-    st.session_state.chat_history.append(HumanMessage(content=user_query))
-    
-    with st.chat_message("Human"):
-        st.markdown(user_query)
+# Streamlit app setup
+def main():
+    st.set_page_config(page_title="Chatbot with Free LLM", page_icon=":robot_face:")
+    st.write(css, unsafe_allow_html=True)
 
-    # Display AI response
-    with st.chat_message("AI"):
-        response = get_response(user_query, st.session_state.chat_history)
-        st.write(response)
-        st.session_state.chat_history.append(AIMessage(content=response))
+    st.header("Chatbot with Hugging Face")
+    pdf_docs = st.file_uploader("Upload your PDFs", type=["pdf"], accept_multiple_files=True)
+    if pdf_docs:
+        with st.spinner("Processing..."):
+            raw_text = get_pdf_text(pdf_docs)
+            text_chunks = get_text_chunks(raw_text)
+            vectorstore = get_vectorstore(text_chunks)
+            st.session_state['conversation_chain'] = get_conversation_chain(vectorstore)
+
+    # Get user input and display chat messages
+    user_input = st.text_input("You:", key="user_input")
+    if user_input:
+        with st.spinner("Generating response..."):
+            if 'conversation_chain' in st.session_state:
+                # Use the conversational retrieval chain
+                response = st.session_state['conversation_chain'].run(user_input)
+            else:
+                # Fall back to a simple generation without retrieval
+                response = generate_response(user_input)
+
+            st.write(bot_template.format(response=response), unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
