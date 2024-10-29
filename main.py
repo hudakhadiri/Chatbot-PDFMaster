@@ -1,60 +1,41 @@
 import streamlit as st
-import PyPDF2
-from transformers import AutoTokenizer, AutoModel
-import torch
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+from transformers import pipeline
+from langchain_core.messages import AIMessage, HumanMessage
 
-# Extract text from PDF
-def extract_text_from_pdf(pdf_file):
-    pdf_reader = PyPDF2.PdfReader(pdf_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text()
-    return text
 
-# Split text into paragraphs
-def split_text_into_paragraphs(text):
-    paragraphs = text.split('\n\n')  # Assuming paragraphs are separated by double newlines
-    return [para.strip() for para in paragraphs if para.strip()]
+context = """
+Artificial intelligence (AI) is intelligence demonstrated by machines, in contrast to the natural intelligence displayed by humans and animals.
+Leading AI textbooks define the field as the study of "intelligent agents": any device that perceives its environment and takes actions that maximize its chance of successfully achieving its goals.
+Colloquially, the term "artificial intelligence" is often used to describe machines (or computers) that mimic "cognitive" functions that humans associate with the human mind, such as "learning" and "problem-solving".
+"""
 
-# Load pre-trained model from Hugging Face
-tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/bert-large-nli-stsb-mean-tokens")
-model = AutoModel.from_pretrained("sentence-transformers/bert-large-nli-stsb-mean-tokens")
-
-# Create embeddings for text chunks
-def create_embeddings(text_chunks):
-    inputs = tokenizer(text_chunks, return_tensors='pt', padding=True, truncation=True)
-    with torch.no_grad():
-        model_output = model(**inputs)
-    embeddings = model_output.last_hidden_state.mean(dim=1).numpy()
-    return embeddings
+# Load pre-trained model and tokenizer from Hugging Face
+qa_pipeline = pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
 
 # Streamlit app
-st.title("PDF Chatbot")
+st.title("Simple Chatbot  :wolf:")
 
-# Upload PDF
-pdf_file = st.file_uploader("Upload PDF", type=["pdf"])
 
-# Extract text and create embeddings
-if pdf_file is not None:
-    with st.spinner("Extracting text from PDF..."):
-        text = extract_text_from_pdf(pdf_file)
-        text_chunks = split_text_into_paragraphs(text)
-        embeddings = create_embeddings(text_chunks)
-    
-    # User input
-    user_input = st.text_input("Ask me something about the PDF")
-    
-    if user_input:
-        user_input_embedding = create_embeddings([user_input])[0]
-        similarities = cosine_similarity([user_input_embedding], embeddings)[0]
-        relevant_chunk_indices = similarities.argsort()[-3:][::-1]
-        relevant_chunks = [text_chunks[i] for i in relevant_chunk_indices]
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [
+             AIMessage(content="Hello, I am a bot. How can I help you?"),
+        ]
+
+user_input = st.chat_input("Type your message here...")
+if user_input is not None and user_input != "":
+    result = qa_pipeline(question=user_input, context=context)
+    response = result['answer']
+    st.session_state.chat_history.append(HumanMessage(content=user_input))
+    st.session_state.chat_history.append(AIMessage(content=response))
         
-        # Generate response by combining relevant chunks
-        response = "\n\n".join(relevant_chunks[:2])  # Limiting to top 2 relevant chunks for clarity
-        st.write(response)
 
-    # Clear embeddings after use to prevent repetitive answers
-    embeddings = []
+for message in st.session_state.chat_history:
+    if isinstance(message, AIMessage):
+        with st.chat_message("AI"):
+            st.write(message.content)
+    elif isinstance(message, HumanMessage):
+        with st.chat_message("Human"):
+            st.write(message.content)
+
+
