@@ -1,9 +1,9 @@
-import import
 import streamlit as st
 from transformers import pipeline
 from langchain_core.messages import AIMessage, HumanMessage
 import fitz  # PyMuPDF
 
+# Extraction ...
 def extract_text_from_pdf(uploaded_file):
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     text = ""
