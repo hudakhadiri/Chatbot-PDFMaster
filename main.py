@@ -27,7 +27,7 @@ def get_most_relevant_chunk(question, context, max_length=512):
             best_chunk = chunk
     return best_chunk
 
-# Streamlit app
+# Streamlit app coception
 st.title("Simple Chatbot :wolf:")
 
 if "chat_history" not in st.session_state:
