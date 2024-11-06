@@ -11,7 +11,7 @@ def extract_text_from_pdf(uploaded_file):
         text += page.get_text()
     return text
 
-# Load pre-trained model and tokenizer from Hugging Face
+# Load pre-trained model and tokenizer from Hugging Face ...
 qa_pipeline = pipeline("question-answering", model="bert-large-uncased-whole-word-masking-finetuned-squad")
 
 def get_most_relevant_chunk(question, context, max_length=512):
