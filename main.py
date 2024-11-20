@@ -1,61 +1,104 @@
 import streamlit as st
-from transformers import pipeline
-from langchain_core.messages import AIMessage, HumanMessage
-import fitz  # PyMuPDF
+from dotenv import load_dotenv
+from PyPDF2 import PdfReader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.chat_models import ChatOpenAI
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from htmlTemplates import css, bot_template, user_template
+from langchain.llms import HuggingFaceHub
 
-# Extraction ...
-def extract_text_from_pdf(uploaded_file):
-    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+def get_pdf_text(pdf_docs):
     text = ""
-    for page in doc:
-        text += page.get_text()
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
     return text
 
-# Load pre-trained model and tokenizer from Hugging Face ...
-qa_pipeline = pipeline("question-answering", model="bert-large-uncased-whole-word-masking-finetuned-squad")
 
-def get_most_relevant_chunk(question, context, max_length=512):
-    # Split context into chunks
-    chunks = [context[i:i + max_length] for i in range(0, len(context), max_length)]
-    best_chunk = None
-    best_score = -1
-    # Find the best chunk based on the model's score
-    for chunk in chunks:
-        result = qa_pipeline(question=question, context=chunk)
-        if result['score'] > best_score:
-            best_score = result['score']
-            best_chunk = chunk
-    return best_chunk
+def get_text_chunks(text):
+    text_splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = text_splitter.split_text(text)
+    return chunks
 
-# Streamlit app coception
-st.title("Simple Chatbot :wolf:")
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [AIMessage(content="Hello, I am a bot. How can I help you?")]
+def get_vectorstore(text_chunks):
+    embeddings = OpenAIEmbeddings()
+    # embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    return vectorstore
 
-# Upload PDF file
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
-if uploaded_file is not None:
-    pdf_text = extract_text_from_pdf(uploaded_file)
-    st.session_state.pdf_text = pdf_text
-    st.write("PDF loaded successfully!")
+def get_conversation_chain(vectorstore):
+    llm = ChatOpenAI()
+    # llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
 
-user_input = st.chat_input("Type your message here...")
+    memory = ConversationBufferMemory(
+        memory_key='chat_history', return_messages=True)
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),
+        memory=memory
+    )
+    return conversation_chain
 
-if user_input is not None and user_input != "":
-    if "pdf_text" in st.session_state:
-        context = st.session_state.pdf_text
-        relevant_chunk = get_most_relevant_chunk(user_input, context)
-        result = qa_pipeline(question=user_input, context=relevant_chunk)
-        response = result['answer']
-        st.session_state.chat_history.append(HumanMessage(content=user_input))
-        st.session_state.chat_history.append(AIMessage(content=response))
 
-for message in st.session_state.chat_history:
-    if isinstance(message, AIMessage):
-        with st.chat_message("AI"):
-            st.write(message.content)
-    elif isinstance(message, HumanMessage):
-        with st.chat_message("Human"):
-            st.write(message.content)
+def handle_userinput(user_question):
+    response = st.session_state.conversation({'question': user_question})
+    st.session_state.chat_history = response['chat_history']
+
+    for i, message in enumerate(st.session_state.chat_history):
+        if i % 2 == 0:
+            st.write(user_template.replace(
+                "{{MSG}}", message.content), unsafe_allow_html=True)
+        else:
+            st.write(bot_template.replace(
+                "{{MSG}}", message.content), unsafe_allow_html=True)
+
+
+def main():
+    load_dotenv()
+    st.set_page_config(page_title="Chat with multiple PDFs",
+                       page_icon=":books:")
+    st.write(css, unsafe_allow_html=True)
+
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = None
+
+    st.header("Chat with multiple PDFs :books:")
+    user_question = st.text_input("Ask a question about your documents:")
+    if user_question:
+        handle_userinput(user_question)
+
+    with st.sidebar:
+        st.subheader("Your documents")
+        pdf_docs = st.file_uploader(
+            "Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
+        if st.button("Process"):
+            with st.spinner("Processing"):
+                # get pdf text
+                raw_text = get_pdf_text(pdf_docs)
+
+                # get the text chunks
+                text_chunks = get_text_chunks(raw_text)
+
+                # create vector store
+                vectorstore = get_vectorstore(text_chunks)
+
+                # create conversation chain
+                st.session_state.conversation = get_conversation_chain(
+                    vectorstore)
+
+
+if __name__ == '__main__':
+    main()
